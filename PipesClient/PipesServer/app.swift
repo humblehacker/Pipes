@@ -41,18 +41,6 @@ class PipesServerImpl {
 
     func run(inputPipeURL: URL, outputPipeURL: URL) async throws {
         log("run")
-        do {
-            try FileManager.default.removeItem(at: inputPipeURL)
-            try FileManager.default.removeItem(at: outputPipeURL)
-        } catch let error {
-            log("error deleting \(error). Ignored.")
-        }
-
-        log("create pipes")
-        mkfifo(inputPipeURL.path, 0o777)
-        mkfifo(outputPipeURL.path, 0o777)
-
-        log("start reading messages")
         let fileHandle = try! FileHandle(forReadingFrom: inputPipeURL)
 
         while true {

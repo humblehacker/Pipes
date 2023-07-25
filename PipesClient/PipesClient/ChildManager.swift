@@ -1,21 +1,32 @@
 import Foundation
+import AppKit
 import Observation
 
-@Observable class ChildManager {
-
+@Observable final class ChildManager {
     var child: Process? = nil
     var isRunning: Bool { child != nil }
     var childListenTask: Task<Void, Never>? = nil
     var counterRunning: Bool = false
-    let inputPipeURL = URL(fileURLWithPath: "/tmp/pipes.input-pipe")
-    let outputPipeURL = URL(fileURLWithPath: "/tmp/pipes.output-pipe")
+    let inputPipeURL: URL
+    let outputPipeURL: URL
 
-    deinit {
-        childListenTask?.cancel()
+    init() {
+        let pipePathPrefix: String = "\(Bundle.main.bundleIdentifier!).\(ProcessInfo.processInfo.processIdentifier)"
+        self.inputPipeURL = URL(fileURLWithPath: "/tmp/\(pipePathPrefix).input.pipe")
+        self.outputPipeURL = URL(fileURLWithPath: "/tmp/\(pipePathPrefix).output.pipe")
+
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] notification in
+            guard let self else { return }
+            self.childListenTask?.cancel()
+            self.removePipes()
+        }
     }
 
     func start() {
         guard child == nil else { return print("child already running") }
+
+        createPipes()
+
         let child = Process()
         child.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/pipes-server")
         child.arguments = [
@@ -25,6 +36,16 @@ import Observation
         try! child.run()
         print("running child with pid: \(child.processIdentifier)")
         self.child = child
+    }
+
+    func createPipes() {
+        mkfifo(inputPipeURL.path, 0o700)
+        mkfifo(outputPipeURL.path, 0o700)
+    }
+
+    func removePipes() {
+        try? FileManager.default.removeItem(at: inputPipeURL)
+        try? FileManager.default.removeItem(at: outputPipeURL)
     }
 
     func listen() {
