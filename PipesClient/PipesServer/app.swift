@@ -5,32 +5,110 @@ import Foundation
 @main
 struct PipesServer: AsyncParsableCommand {
     @Option(help: "path to input pipe")
-    var pipePath: String
+    var inputPipePath: String
 
+    @Option(help: "path to output pipe")
+    var outputPipePath: String
 
-    mutating func run() async throws {
-        print("listening on \(pipePath)")
+    let serverImpl = PipesServerImpl()
 
-        let url = URL(fileURLWithPath: pipePath)
-        await listen(pipeURL: url)
+    private enum CodingKeys: String, CodingKey {
+        case inputPipePath
+        case outputPipePath
     }
 
-    func listen(pipeURL: URL) async {
+    func run() async throws {
+        log("listening on \(inputPipePath)")
+        log("outputting on \(outputPipePath)")
+
         do {
-            try FileManager.default.removeItem(at: pipeURL)
+            try await serverImpl.run(
+                inputPipeURL: URL(fileURLWithPath: inputPipePath),
+                outputPipeURL: URL(fileURLWithPath: outputPipePath)
+            )
         } catch let error {
-            print("error deleting", error)
+            log("error running: \(error)")
+        }
+    }
+}
+
+func log(_ message: String, file: String = #file, line: Int = #line) {
+    print("• \(message) \(file):\(line)")
+}
+
+class PipesServerImpl {
+    var counterTask: Task<Void, Never>? = nil
+
+    func run(inputPipeURL: URL, outputPipeURL: URL) async throws {
+        log("run")
+        do {
+            try FileManager.default.removeItem(at: inputPipeURL)
+            try FileManager.default.removeItem(at: outputPipeURL)
+        } catch let error {
+            log("error deleting \(error). Ignored.")
         }
 
-        mkfifo(pipeURL.path, 0o777)
-        let fileHandle = FileHandle(forReadingAtPath: pipeURL.path)
-        
+        log("create pipes")
+        mkfifo(inputPipeURL.path, 0o777)
+        mkfifo(outputPipeURL.path, 0o777)
+
+        log("start reading messages")
+        let fileHandle = try! FileHandle(forReadingFrom: inputPipeURL)
+
         while true {
-            if let data = fileHandle?.availableData {
-                if let readedData = String(data: data, encoding: .utf8), readedData != "" {
-                    print(readedData)
+            if let message = fileHandle.availableData.utf8String, !message.isEmpty {
+                let parts = message.components(separatedBy: ":")
+                let (command, rest) = (parts.first, parts.dropFirst())
+                switch command {
+                case "echo":
+                    echo(rest.first!)
+                case "startCounter":
+                    try startCounter(outputPipeURL: outputPipeURL)
+                case "stopCounter":
+                    stopCounter()
+                default:
+                    log("unknown command \(message)")
                 }
+                print(message)
             }
         }
+    }
+
+    func echo(_ message: String) {
+        log("echo \(message)")
+    }
+
+    func startCounter(outputPipeURL: URL) throws {
+        log("startCounter")
+        guard counterTask == nil else { return log("Counter already counting") }
+
+        counterTask = Task.detached {
+            var counter = 0
+            while (!Task.isCancelled) {
+                counter += 1
+                let output = "counter: \(counter)"
+                log(output)
+                let fileHandle = try! FileHandle(forWritingTo: outputPipeURL)
+                try! fileHandle.write(contentsOf: output.data(using: .utf8)!)
+                try! fileHandle.close()
+                try? await Task.sleep(for: .seconds(1))
+            }
+
+        }
+    }
+
+    func stopCounter() {
+        log("stopCounter")
+
+        guard let counterTask else { return log("Counter not counting") }
+        counterTask.cancel()
+        self.counterTask = nil
+        log("Counter stopped")
+    }
+}
+
+extension Data {
+    var utf8String: String? {
+        String(data: self, encoding: .utf8)
     }
 }
